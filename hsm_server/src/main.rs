@@ -2,7 +2,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::net::SocketAddr;
 use rcgen::{KeyPair, SigningKey};
 #[tokio::main]
