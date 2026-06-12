@@ -1,7 +1,10 @@
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
 use std::ptr;
-
+use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use bincode;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
@@ -89,6 +92,27 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     C_WaitForSlotEvent: None,
 };
 
+static SERVER_CONNECTION: Mutex<Option<TcpStream>> = Mutex::new(None);
+static CURRENT_SESSION_ID: Mutex<u64> = Mutex::new(0);
+
+
+fn send_request(stream: &mut TcpStream, req: &HsmRequest) -> Result<HsmResponse, Box<dyn std::error::Error>> {    //serialize Request
+    let encode: Vec<u8> = bincode::serialize(&req)?;
+    let encoded_len = encode.len() as u32;
+    stream.write_all(&encoded_len.to_be_bytes())?;
+    stream.write_all(&encode)?;
+    stream.flush()?;
+
+    let mut len_bytes = [0u8;4];
+    stream.read_exact(&mut len_bytes)?;
+    let res_len = u32::from_be_bytes(len_bytes) as usize;
+
+    let mut res_bytes = vec![0u8; res_len];
+    stream.read_exact(&mut res_bytes)?;
+
+    let response: HsmResponse = bincode::deserialize(&res_bytes)?;
+    Ok(response)
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_Initialize(_pInitArgs: CK_VOID_PTR) -> CK_RV {
@@ -129,7 +153,6 @@ pub unsafe extern "C" fn C_GetFunctionList(ppFunctionList: *mut *mut CK_FUNCTION
     0
 }
 
-// KORRIGIERT: Signaturen an cryptoki-sys Typen angepasst
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_Login(
     _session: CK_SESSION_HANDLE,
@@ -145,7 +168,6 @@ pub unsafe extern "C" fn C_Logout(_session: CK_SESSION_HANDLE) -> CK_RV {
     0
 }
 
-// KORRIGIERT: Mechanism muss ein Pointer (*mut) sein
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_GenerateKeyPair(
     _session: CK_SESSION_HANDLE,
@@ -201,7 +223,39 @@ pub unsafe extern "C" fn C_Sign(
     _pSignature: CK_BYTE_PTR,
     _pulSignatureLen: *mut CK_ULONG
 ) -> CK_RV {
-    0
+    if _pData.is_null() || _pSignature.is_null() {
+        return 0x00000007;
+    }
+
+    let data_slice = std::slice::from_raw_parts(_pData, _ulDataLen as usize);
+    let data_vec = Vec::from(data_slice);
+
+    let session_id = *CURRENT_SESSION_ID.lock().unwrap();
+    let req = HsmRequest::Sign { session_id: session_id, data: data_vec };
+
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+    if let Some(ref mut stream) = *conn_guard {
+
+        match send_request(stream, &req) {
+            Ok(HsmResponse::SignResult { signature }) => {
+                println!("Signatur erfolgreich vom Server empfangen!");
+                0
+            }
+            Ok(HsmResponse::Error(err)) => {
+                eprintln!("Server meldet Fehler: {}", err);
+                0x00000006
+            }
+            Err(e) => {
+                eprintln!("Netzwerkfehler beim Senden: {}", e);
+                0x00000006
+            }
+            _ => 0x00000006,
+        }
+
+    } else {
+        eprintln!("Fehler: Keine aktive Server-Verbindung gefunden! War C_Initialize erfolgreich?");
+        0x00000003
+    }
 }
 
 
