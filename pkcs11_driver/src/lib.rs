@@ -1,0 +1,191 @@
+use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
+use std::ptr;
+
+static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
+    version: cryptoki_sys::CK_VERSION { major: 2, minor: 40 },
+    C_Initialize: Some(C_Initialize),
+    C_Finalize: Some(C_Finalize),
+    C_GetInfo: None,
+    C_GetFunctionList: Some(C_GetFunctionList),
+    C_GetSlotList: None,
+    C_GetSlotInfo: None,
+    C_GetTokenInfo: None,
+    C_GetMechanismList: None,
+    C_GetMechanismInfo: None,
+    C_InitToken: None,
+    C_InitPIN: None,
+    C_SetPIN: None,
+    C_OpenSession: Some(C_OpenSession),
+    C_CloseSession: None,
+    C_CloseAllSessions: None,
+    C_GetSessionInfo: None,
+    C_GetOperationState: None,
+    C_SetOperationState: None,
+    C_Login: Some(C_Login),
+    C_Logout: Some(C_Logout),
+    C_CreateObject: None,
+    C_CopyObject: None,
+    C_DestroyObject: None,
+    C_GetObjectSize: None,
+    C_GetAttributeValue: None,
+    C_SetAttributeValue: None,
+    C_FindObjectsInit: Some(C_FindObjectsInit),
+    C_FindObjects: Some(C_FindObjects),
+    C_FindObjectsFinal: Some(C_FindObjectsFinal),
+    C_EncryptInit: None,
+    C_Encrypt: None,
+    C_EncryptUpdate: None,
+    C_EncryptFinal: None,
+    C_DecryptInit: None,
+    C_Decrypt: None,
+    C_DecryptUpdate: None,
+    C_DecryptFinal: None,
+    C_DigestInit: None,
+    C_Digest: None,
+    C_DigestUpdate: None,
+    C_DigestKey: None,
+    C_DigestFinal: None,
+    C_SignInit: Some(C_SignInit),
+    C_Sign: Some(C_Sign),
+    C_SignUpdate: None,
+    C_SignFinal: None,
+    C_SignRecoverInit: None,
+    C_SignRecover: None,
+    C_VerifyInit: None,
+    C_Verify: None,
+    C_VerifyUpdate: None,
+    C_VerifyFinal: None,
+    C_VerifyRecoverInit: None,
+    C_VerifyRecover: None,
+    C_DigestEncryptUpdate: None,
+    C_DecryptDigestUpdate: None,
+    C_SignEncryptUpdate: None,
+    C_DecryptVerifyUpdate: None,
+    C_GenerateKey: None,
+    C_GenerateKeyPair: Some(C_GenerateKeyPair),
+    C_WrapKey: None,
+    C_UnwrapKey: None,
+    C_DeriveKey: None,
+    C_SeedRandom: None,
+    C_GenerateRandom: None,
+    C_GetFunctionStatus: None,
+    C_CancelFunction: None,
+    C_WaitForSlotEvent: None,
+};
+
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_Initialize(_pInitArgs: CK_VOID_PTR) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_Finalize(_pReserved: CK_VOID_PTR) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_OpenSession(
+    _slotID: CK_SLOT_ID,
+    _flags: CK_FLAGS,
+    _pApplication: CK_VOID_PTR,
+    _Notify: CK_NOTIFY,
+    phSession: *mut CK_SESSION_HANDLE,
+) -> CK_RV {
+    if phSession.is_null() {
+        return 0x00000007; // CKR_ARGUMENTS_BAD
+    }
+    *phSession = 1;
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_CloseSession(_session: CK_SESSION_HANDLE) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_GetFunctionList(ppFunctionList: *mut *mut CK_FUNCTION_LIST) -> CK_RV {
+    if ppFunctionList.is_null() {
+        return 0x00000007;
+    }
+    *ppFunctionList = &FUNCTION_LIST as *const CK_FUNCTION_LIST as *mut CK_FUNCTION_LIST;
+    0
+}
+
+// KORRIGIERT: Signaturen an cryptoki-sys Typen angepasst
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_Login(
+    _session: CK_SESSION_HANDLE,
+    _userType: CK_USER_TYPE,
+    _pPin: CK_BYTE_PTR,
+    _ulPinLen: CK_ULONG
+) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_Logout(_session: CK_SESSION_HANDLE) -> CK_RV {
+    0
+}
+
+// KORRIGIERT: Mechanism muss ein Pointer (*mut) sein
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_GenerateKeyPair(
+    _session: CK_SESSION_HANDLE,
+    _pMechanism: *mut CK_MECHANISM,
+    _pPublicKeyTemplate: CK_ATTRIBUTE_PTR,
+    _ulPublicKeyAttributeCount: CK_ULONG,
+    _pPrivateKeyTemplate: CK_ATTRIBUTE_PTR,
+    _ulPrivateKeyAttributeCount: CK_ULONG,
+    _phPublicKey: *mut CK_OBJECT_HANDLE,
+    _phPrivateKey: *mut CK_OBJECT_HANDLE
+) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_FindObjectsInit(
+    _session: CK_SESSION_HANDLE,
+    _pTemplate: CK_ATTRIBUTE_PTR,
+    _ulCount: CK_ULONG
+) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_FindObjects(
+    _session: CK_SESSION_HANDLE,
+    _phObject: *mut CK_OBJECT_HANDLE,
+    _ulMaxObjectCount: CK_ULONG,
+    _pulObjectCount: *mut CK_ULONG
+) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_FindObjectsFinal(_session: CK_SESSION_HANDLE) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_SignInit(
+    _session: CK_SESSION_HANDLE,
+    _pMechanism: *mut CK_MECHANISM,
+    _hKey: CK_OBJECT_HANDLE
+) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_Sign(
+    _session: CK_SESSION_HANDLE,
+    _pData: CK_BYTE_PTR,
+    _ulDataLen: CK_ULONG,
+    _pSignature: CK_BYTE_PTR,
+    _pulSignatureLen: *mut CK_ULONG
+) -> CK_RV {
+    0
+}
+
+
