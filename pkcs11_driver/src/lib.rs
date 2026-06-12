@@ -116,11 +116,28 @@ fn send_request(stream: &mut TcpStream, req: &HsmRequest) -> Result<HsmResponse,
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_Initialize(_pInitArgs: CK_VOID_PTR) -> CK_RV {
-    0
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+
+    if conn_guard.is_none() {
+        match TcpStream::connect("127.0.0.1:8888") {
+            Ok(stream) => {
+                *conn_guard = Some(stream);
+                0
+            }
+            Err(e) => {
+                eprintln!("Netzwerkfehler beim Verbinden: {}", e);
+                0x00000006
+            }
+        }
+    }else {
+        0
+    }
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_Finalize(_pReserved: CK_VOID_PTR) -> CK_RV {
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+    *conn_guard = None;
     0
 }
 
@@ -223,7 +240,7 @@ pub unsafe extern "C" fn C_Sign(
     _pSignature: CK_BYTE_PTR,
     _pulSignatureLen: *mut CK_ULONG
 ) -> CK_RV {
-    if _pData.is_null() || _pSignature.is_null() {
+    if _pData.is_null() {
         return 0x00000007;
     }
 
@@ -239,6 +256,19 @@ pub unsafe extern "C" fn C_Sign(
         match send_request(stream, &req) {
             Ok(HsmResponse::SignResult { signature }) => {
                 println!("Signatur erfolgreich vom Server empfangen!");
+                if _pSignature.is_null() {
+                    *_pulSignatureLen = signature.len() as CK_ULONG;
+                    return 0;
+                }
+
+                if (*_pulSignatureLen as usize) < signature.len() {
+                    *_pulSignatureLen = signature.len() as CK_ULONG;
+                     return 0x00000150
+                }
+
+                std::ptr::copy_nonoverlapping(signature.as_ptr(), _pSignature, signature.len());
+                *_pulSignatureLen = signature.len() as CK_ULONG;
+
                 0
             }
             Ok(HsmResponse::Error(err)) => {
