@@ -1,6 +1,22 @@
 use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
 use std::ptr;
 
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum HsmRequest {
+    OpenSession,
+    Sign { session_id: u64, data: Vec<u8> },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum HsmResponse {
+    SessionOpened { session_id: u64 },
+    SignResult { signature: Vec<u8> },
+    Error(String),
+}
+
+
 static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     version: cryptoki_sys::CK_VERSION { major: 2, minor: 40 },
     C_Initialize: Some(C_Initialize),

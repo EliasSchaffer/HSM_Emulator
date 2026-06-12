@@ -619,6 +619,7 @@ name = "pkcs11_driver"
 version = "0.1.0"
 dependencies = [
  "cryptoki-sys",
+ "serde",
 ]
 
 [[package]]
