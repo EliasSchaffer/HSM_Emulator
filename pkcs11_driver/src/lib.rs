@@ -93,7 +93,6 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
 };
 
 static SERVER_CONNECTION: Mutex<Option<TcpStream>> = Mutex::new(None);
-static CURRENT_SESSION_ID: Mutex<u64> = Mutex::new(0);
 
 
 fn send_request(stream: &mut TcpStream, req: &HsmRequest) -> Result<HsmResponse, Box<dyn std::error::Error>> {    //serialize Request
@@ -160,21 +159,22 @@ pub unsafe extern "C" fn C_OpenSession(
         // 1. Führe den Request aus und fange das Result ab
         match send_request(stream, &req) {
             Ok(HsmResponse::SessionOpened { session_id}) => {
-                // 2. Extrahiere die ID aus der erfolgreichen Antwort
-                // (Ersetze .session_id mit dem echten Feldnamen deiner HsmResponse)
+
                 *phSession = session_id as CK_SESSION_HANDLE;
 
                 println!("Request successfull, Session set.");
             }
             Ok(HsmResponse::Error(err_msg)) => {
                 eprintln!("HSM Error: {}", err_msg);
-                // Hier ggf. einen Fehler-Rückgabewert setzen
+                return 0x00000006;
             }
             Ok(_) => {
                 eprintln!("Unexepected Response from HSM:");
+                return 0x00000006;
             }
             Err(e) => {
                 eprintln!("Network Error: {:?}", e);
+                return 0x00000006;
             }
         }
     }
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn C_SignInit(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_Sign(
-    _session: CK_SESSION_HANDLE,
+    session: CK_SESSION_HANDLE,
     _pData: CK_BYTE_PTR,
     _ulDataLen: CK_ULONG,
     _pSignature: CK_BYTE_PTR,
@@ -272,8 +272,8 @@ pub unsafe extern "C" fn C_Sign(
     let data_slice = std::slice::from_raw_parts(_pData, _ulDataLen as usize);
     let data_vec = Vec::from(data_slice);
 
-    let session_id = *CURRENT_SESSION_ID.lock().unwrap();
-    let req = HsmRequest::Sign { session_id: session_id, data: data_vec };
+    let session_id = session as u64;
+    let req = HsmRequest::Sign { session_id, data: data_vec };
 
     let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
     if let Some(ref mut stream) = *conn_guard {
