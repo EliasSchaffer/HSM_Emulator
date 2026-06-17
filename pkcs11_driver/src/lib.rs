@@ -152,7 +152,32 @@ pub unsafe extern "C" fn C_OpenSession(
     if phSession.is_null() {
         return 0x00000007; // CKR_ARGUMENTS_BAD
     }
-    *phSession = 1;
+    let req = HsmRequest::OpenSession {};
+
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+
+    if let Some(ref mut stream) = *conn_guard {
+        // 1. Führe den Request aus und fange das Result ab
+        match send_request(stream, &req) {
+            Ok(HsmResponse::SessionOpened { session_id}) => {
+                // 2. Extrahiere die ID aus der erfolgreichen Antwort
+                // (Ersetze .session_id mit dem echten Feldnamen deiner HsmResponse)
+                *phSession = session_id as CK_SESSION_HANDLE;
+
+                println!("Request successfull, Session set.");
+            }
+            Ok(HsmResponse::Error(err_msg)) => {
+                eprintln!("HSM Error: {}", err_msg);
+                // Hier ggf. einen Fehler-Rückgabewert setzen
+            }
+            Ok(_) => {
+                eprintln!("Unexepected Response from HSM:");
+            }
+            Err(e) => {
+                eprintln!("Network Error: {:?}", e);
+            }
+        }
+    }
     0
 }
 
@@ -255,7 +280,7 @@ pub unsafe extern "C" fn C_Sign(
 
         match send_request(stream, &req) {
             Ok(HsmResponse::SignResult { signature }) => {
-                println!("Signatur erfolgreich vom Server empfangen!");
+                println!("Signature received from HSM!");
                 if _pSignature.is_null() {
                     *_pulSignatureLen = signature.len() as CK_ULONG;
                     return 0;
@@ -272,18 +297,18 @@ pub unsafe extern "C" fn C_Sign(
                 0
             }
             Ok(HsmResponse::Error(err)) => {
-                eprintln!("Server meldet Fehler: {}", err);
+                eprintln!("Server Error: {}", err);
                 0x00000006
             }
             Err(e) => {
-                eprintln!("Netzwerkfehler beim Senden: {}", e);
+                eprintln!("Network Error: {}", e);
                 0x00000006
             }
             _ => 0x00000006,
         }
 
     } else {
-        eprintln!("Fehler: Keine aktive Server-Verbindung gefunden! War C_Initialize erfolgreich?");
+        eprintln!("Fehler: No active Server Connection found!");
         0x00000003
     }
 }
