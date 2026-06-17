@@ -1,25 +1,29 @@
+use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 use bincode;
 use rcgen::{KeyPair, SigningKey};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
     OpenSession,
+    CloseSession { session_id: u64 },
     Sign { session_id: u64, data: Vec<u8> },
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmResponse {
     SessionOpened { session_id: u64 },
+    SessionClosed,
     SignResult { signature: Vec<u8> },
     Error(String),
 }
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
-
+static ACTIVE_SESSIONS: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
     println!("Driver Connection established!");
 
@@ -39,7 +43,16 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
         let response = match request {
             HsmRequest::OpenSession => {
                 let new_id = SESSION_COUNTER.fetch_add(1, Ordering::SeqCst);
+                ACTIVE_SESSIONS.lock().unwrap().insert(new_id);
                 HsmResponse::SessionOpened { session_id: new_id }
+            }
+            HsmRequest::CloseSession { session_id } => {
+                let existed = ACTIVE_SESSIONS.lock().unwrap().remove(&session_id);
+                if existed {
+                    HsmResponse::SessionClosed
+                }else {
+                    HsmResponse::Error("Session not found!".to_string())
+                }
             }
             HsmRequest::Sign { session_id, data } => {
                 println!("Signing Data for Session {}", session_id);

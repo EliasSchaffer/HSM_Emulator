@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
@@ -9,12 +10,15 @@ use bincode;
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
     OpenSession,
+    CloseSession { session_id: u64 },
     Sign { session_id: u64, data: Vec<u8> },
+    
 }
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmResponse {
     SessionOpened { session_id: u64 },
+    SessionClosed,
     SignResult { signature: Vec<u8> },
     Error(String),
 }
@@ -36,7 +40,7 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     C_SetPIN: None,
     C_OpenSession: Some(C_OpenSession),
     C_CloseSession: None,
-    C_CloseAllSessions: None,
+    C_CloseAllSessions: Some(C_CloseSession),
     C_GetSessionInfo: None,
     C_GetOperationState: None,
     C_SetOperationState: None,
@@ -124,7 +128,7 @@ pub unsafe extern "C" fn C_Initialize(_pInitArgs: CK_VOID_PTR) -> CK_RV {
                 0
             }
             Err(e) => {
-                eprintln!("Netzwerkfehler beim Verbinden: {}", e);
+                eprintln!("Network Error: {}", e);
                 0x00000006
             }
         }
@@ -182,9 +186,31 @@ pub unsafe extern "C" fn C_OpenSession(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn C_CloseSession(_session: CK_SESSION_HANDLE) -> CK_RV {
-    0
+pub unsafe extern "C" fn C_CloseSession(session: CK_SESSION_HANDLE) -> CK_RV {
+
+
+
+    let session_id = session as u64;
+    let req = HsmRequest::CloseSession { session_id};
+
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+    if let Some(ref mut stream) = *conn_guard {
+        match send_request(stream, &req) {
+            Ok(HsmResponse::SessionClosed) => {
+                println!("Session closed!");
+                0
+            }
+            _ => {
+                eprintln!("Unexpected Response from HSM:");
+                0x00000006
+            }
+        }
+    } else {
+        eprintln!("Fehler: No active Server Connection found!");
+            0x00000003
+    }
 }
+
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_GetFunctionList(ppFunctionList: *mut *mut CK_FUNCTION_LIST) -> CK_RV {
