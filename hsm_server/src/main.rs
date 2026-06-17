@@ -21,7 +21,7 @@ pub enum HsmResponse {
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Treiber hat sich verbunden!");
+    println!("Driver Connection established!");
 
     loop {
         let mut len_bytes = [0u8; 4];
@@ -34,7 +34,7 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
         stream.read_exact(&mut req_bytes)?;
 
         let request: HsmRequest = bincode::deserialize(&req_bytes)?;
-        println!("Server empfing Request: {:?}", request);
+        println!("Request from Client: {:?}", request);
 
         let response = match request {
             HsmRequest::OpenSession => {
@@ -42,7 +42,7 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
                 HsmResponse::SessionOpened { session_id: new_id }
             }
             HsmRequest::Sign { session_id, data } => {
-                println!("Signiere Daten für Session {}", session_id);
+                println!("Signing Data for Session {}", session_id);
 
                 //TODO Load key from HSM
                 let pem_string = "-----BEGIN PRIVATE KEY-----\n\
@@ -69,22 +69,22 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
         stream.flush()?;
     }
 
-println!("Verbindung zum Treiber geschlossen.");
+println!("Driver Connection closed.");
 Ok(())
 }
 
 fn main() {
     let listener = TcpListener::bind("127.0.0.1:8888").unwrap();
-    println!("HSM-Emulator-Server läuft auf Port 8888...");
+    println!("HSM Emulator Server running on 127.0.0.1:8888");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 if let Err(e) = handle_client(stream) {
-                    eprintln!("Fehler bei Client-Verarbeitung: {}", e);
+                    eprintln!("Error on Client: {}", e);
                 }
             }
-            Err(e) => eprintln!("Verbindungsfehler: {}", e),
+            Err(e) => eprintln!("Connection Error: {}", e),
         }
     }
 }
