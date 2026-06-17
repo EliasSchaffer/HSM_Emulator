@@ -12,6 +12,7 @@ pub enum HsmRequest {
     OpenSession,
     CloseSession { session_id: u64 },
     Sign { session_id: u64, data: Vec<u8> },
+    Error(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -71,7 +72,9 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
             }
             HsmRequest::OpenSession => {
                 HsmResponse::SessionOpened { session_id: 1 }
-            }
+            },
+            //TODO implement
+            HsmRequest::Error(_) => todo!()
         };
 
 
