@@ -7,7 +7,7 @@ use std::sync::{LazyLock, Mutex};
 use std::error::Error;
 use bincode;
 use rcgen::{KeyPair, SigningKey};
-use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
+use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
@@ -132,6 +132,36 @@ async fn setup_database() -> Result<SqlitePool, Box<dyn Error>> {
 
     println!("Database initialized");
     Ok(pool)
+}
+
+async fn save_key_to_db(pool: &SqlitePool, key_id: &str, key_type: &str, encrypted_blob: &[u8]) -> Result<(), Box<dyn Error>> {
+    sqlx::query("INSERT INTO hsm_keys (key_id, key_type, encrypted_blob) VALUES (?, ?, ?)")
+        .bind(key_id)
+        .bind(key_type)
+        .bind(encrypted_blob)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+async fn load_key_from_db(pool: &SqlitePool, key_id: &str) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    let row = sqlx::query(
+        "SELECT encrypted_blob FROM hsm_keys WHERE key_id = ?"
+    )
+        .bind(key_id)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        Some(r) => {
+            let blob: Vec<u8> = r.get("encrypted_blob");
+            Ok(Some(blob))
+        }
+        None => {
+            Ok(None)
+        }
+    }
 }
 
 // async fn create_signature(
