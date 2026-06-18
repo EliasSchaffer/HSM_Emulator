@@ -10,6 +10,9 @@ use rcgen::{KeyPair, SigningKey};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use ring::pbkdf2;
 use std::num::NonZeroU32;
+use ring::aead::{Aad, Nonce, NonceSequence, SealingKey, UnboundKey};
+use ring::rand::{SecureRandom, SystemRandom};
+use ring::aead::{self, BoundKey, OpeningKey};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
@@ -29,6 +32,16 @@ pub enum HsmResponse {
 
 struct MasterKey {
     bytes: [u8; 32],
+}
+
+struct SimpleNonceSequence {
+    nonce: [u8; 12],
+}
+
+impl NonceSequence for SimpleNonceSequence {
+    fn advance(&mut self) -> Result<Nonce, ring::error::Unspecified> {
+        Ok(Nonce::assume_unique_for_key(self.nonce))
+    }
 }
 
 
@@ -110,7 +123,7 @@ fn main() {
 
     let master_key = derive_master_key(&password);
     println!("✔ Master Key Successfully derived!");
-    
+
     let rt = tokio::runtime::Runtime::new().unwrap();
     let db_pool = rt.block_on(setup_database()).unwrap();
 
@@ -200,5 +213,30 @@ async fn load_key_from_db(pool: &SqlitePool, key_id: &str) -> Result<Option<Vec<
         }
     }
 }
+
+pub fn encrypt_blob(master_key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let rand = SystemRandom::new();
+
+    let mut nonce_bytes = [0u8; 12];
+    rand.fill(&mut nonce_bytes)
+        .map_err(|_| "Fehler beim Generieren der Nonce")?;
+
+    let unbound_key = UnboundKey::new(&aead::AES_256_GCM, master_key)
+        .map_err(|_| "Ungültiger Master-Schlüssel für AES-GCM")?;
+
+    let nonce_sequence = SimpleNonceSequence { nonce: nonce_bytes };
+    let mut sealing_key = SealingKey::new(unbound_key, nonce_sequence);
+
+    let mut in_out = plaintext.to_vec();
+
+    sealing_key.seal_in_place_append_tag(Aad::empty(), &mut in_out)
+        .map_err(|_| "Verschlüsselung fehlgeschlagen")?;
+
+    let mut encrypted_packet = nonce_bytes.to_vec();
+    encrypted_packet.extend_from_slice(&in_out);
+    Ok(encrypted_packet)
+}
+
+
 
 
