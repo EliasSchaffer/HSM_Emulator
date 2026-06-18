@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
@@ -235,6 +235,29 @@ pub fn encrypt_blob(master_key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, 
     let mut encrypted_packet = nonce_bytes.to_vec();
     encrypted_packet.extend_from_slice(&in_out);
     Ok(encrypted_packet)
+}
+
+pub fn decrypt_blob(master_key: &[u8; 32], encrypted_packet: &[u8]) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    if encrypted_packet.len() < 12 {
+        return Err("Packet too short".into());
+    }
+
+    let (nonce_bytes, ciphertext) = encrypted_packet.split_at(12);
+    let mut in_out = ciphertext.to_vec();
+
+    let unbound_key = UnboundKey::new(&aead::AES_256_GCM, master_key)
+        .map_err(|_| "Invalid Master Key for AES-GCM")?;
+
+    let mut fixed_nonce = [0u8; 12];
+    fixed_nonce.copy_from_slice(nonce_bytes);
+
+    let nonce_sequence = SimpleNonceSequence { nonce: fixed_nonce };
+    let mut opening_key = OpeningKey::new(unbound_key, nonce_sequence);
+
+    let decrypted_data = opening_key.open_in_place(Aad::empty(), &mut in_out)
+        .map_err(|_| "Decryption failed")?;
+
+    Ok(decrypted_data.to_vec())
 }
 
 
