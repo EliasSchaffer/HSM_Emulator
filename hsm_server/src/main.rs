@@ -8,6 +8,8 @@ use std::error::Error;
 use bincode;
 use rcgen::{KeyPair, SigningKey};
 use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
+use ring::pbkdf2;
+use std::num::NonZeroU32;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
@@ -23,6 +25,10 @@ pub enum HsmResponse {
     SessionClosed,
     SignResult { signature: Vec<u8> },
     Error(String),
+}
+
+struct MasterKey {
+    bytes: [u8; 32],
 }
 
 
@@ -90,6 +96,21 @@ Ok(())
 }
 
 fn main() {
+    println!("=== HSM Emulator ===");
+    println!("Starting HSM Emulator Server...");
+    println!("Please enter the master password to initialize the HSM emulator:");
+    std::io::Write::flush(&mut std::io::stdout()).unwrap();
+
+    let password = rpassword::read_password().unwrap();
+
+    if password.trim().is_empty() {
+        eprintln!("Password cannot be empty!");
+        std::process::exit(1);
+    }
+
+    let master_key = derive_master_key(&password);
+    println!("✔ Master Key Successfully derived!");
+    
     let rt = tokio::runtime::Runtime::new().unwrap();
     let db_pool = rt.block_on(setup_database()).unwrap();
 
@@ -107,6 +128,22 @@ fn main() {
             Err(e) => eprintln!("Connection Error: {}", e),
         }
     }
+}
+
+fn derive_master_key(password: &str) -> [u8; 32] {
+    let mut master_key = [0u8; 32];
+
+    let salt = b"HSM_EMULATOR_STABLE_SALT_12345";
+    let iterations = NonZeroU32::new(100_000).unwrap();
+
+    pbkdf2::derive(
+        pbkdf2::PBKDF2_HMAC_SHA256,
+        iterations,
+        salt,
+        password.as_bytes(),
+        &mut master_key,
+    );
+    master_key
 }
 
 async fn setup_database() -> Result<SqlitePool, Box<dyn Error>> {
@@ -164,26 +201,4 @@ async fn load_key_from_db(pool: &SqlitePool, key_id: &str) -> Result<Option<Vec<
     }
 }
 
-// async fn create_signature(
-//     Json(CreateSignatureRequest { file_hash, private_key_token }): Json<CreateSignatureRequest>,
-// ) -> Result<String, String> {
-//
-//     println!("Received request with file_hash: {:?}", file_hash);
-//     println!("Received request with private_key_token: {:?}", private_key_token);
-//     println!("Getting private key from HSM...");
-//     let key_pair = KeyPair::from_pem("-----BEGIN PRIVATE KEY-----
-// MC4CAQAwBQYDK2VwBCIEINTp9M7v7K62bUvpx6Hh7vKclBv7v0jXlNmZ4X9v7v9A
-// -----END PRIVATE KEY-----")
-//         .map_err(|e| format!("Error loading the key {}", e))?;
-//
-//     println!("Signing file...");
-//     let signature_bytes = key_pair.sign(file_hash.as_slice())
-//         .map_err(|e| format!("Error while signing {}", e))?;
-//
-//     println!("Signature created successfully!");
-//     let signature_hex = hex::encode(signature_bytes);
-//
-//     println!("Signature hex: {}", signature_hex);
-//     Ok(signature_hex)
-// }
 

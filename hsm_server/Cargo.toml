@@ -13,3 +13,4 @@ rcgen = "0.14.8"
 hex = "0.4.3"
 bincode = "1.3.0"
 sqlx = { version = "0.9.0", features = [ "runtime-tokio", "sqlite", "macros" ] }
+rpassword = "7.3"
