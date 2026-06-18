@@ -4,8 +4,10 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex};
+use std::error::Error;
 use bincode;
 use rcgen::{KeyPair, SigningKey};
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum HsmRequest {
@@ -23,9 +25,11 @@ pub enum HsmResponse {
     Error(String),
 }
 
+
+
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_SESSIONS: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_client(mut stream: TcpStream, d_pool: SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
     println!("Driver Connection established!");
 
     loop {
@@ -66,13 +70,9 @@ fn handle_client(mut stream: TcpStream) -> Result<(), Box<dyn std::error::Error>
                 let key_pair = rcgen::KeyPair::from_pem(pem_string).unwrap();
                 let signature_bytes = key_pair.sign(&data).unwrap();
 
-                // Hier wird die Response nur für den Match-Block zurückgegeben,
-                // NICHT für die ganze Funktion!
                 HsmResponse::SignResult { signature: signature_bytes }
             }
-            HsmRequest::OpenSession => {
-                HsmResponse::SessionOpened { session_id: 1 }
-            },
+
             //TODO implement
             HsmRequest::Error(_) => todo!()
         };
@@ -90,19 +90,48 @@ Ok(())
 }
 
 fn main() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let db_pool = rt.block_on(setup_database()).unwrap();
+
     let listener = TcpListener::bind("127.0.0.1:8888").unwrap();
     println!("HSM Emulator Server running on 127.0.0.1:8888");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
-                if let Err(e) = handle_client(stream) {
+                let pool_cloned = db_pool.clone();
+                if let Err(e) = handle_client(stream, pool_cloned) {
                     eprintln!("Error on Client: {}", e);
                 }
             }
             Err(e) => eprintln!("Connection Error: {}", e),
         }
     }
+}
+
+async fn setup_database() -> Result<SqlitePool, Box<dyn Error>> {
+    let connection_string = "sqlite://emulator.db";
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(connection_string)
+        .await?;
+
+    sqlx::query(
+        r#"
+            CREATE TABLE IF NOT EXISTS hsm_keys (
+            key_id TEXT PRIMARY KEY,
+            key_type TEXT NOT NULL,
+            encrypted_blob BLOB NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        "#
+    )
+    .execute(&pool)
+    .await?;
+
+    println!("Database initialized");
+    Ok(pool)
 }
 
 // async fn create_signature(
