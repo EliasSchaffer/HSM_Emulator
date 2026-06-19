@@ -1,1 +1,7 @@
+# Rust Standard
 /target
+
+# SQLite Datenbanken ignorieren
+*.db
+*.sqlite
+*.sqlite3
