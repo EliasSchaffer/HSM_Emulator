@@ -37,8 +37,8 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     C_GetSlotList: Some(C_GetSlotList),
     C_GetSlotInfo: Some(C_GetSlotInfo),
     C_GetTokenInfo: Some(C_GetTokenInfo),
-    C_GetMechanismList: None,
-    C_GetMechanismInfo: None,
+    C_GetMechanismList: Some(C_GetMechanismList),
+    C_GetMechanismInfo: Some(C_GetMechanismInfo),
     C_InitToken: None,
     C_InitPIN: None,
     C_SetPIN: None,
@@ -101,6 +101,7 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
 };
 
 static SERVER_CONNECTION: Mutex<Option<TcpStream>> = Mutex::new(None);
+static FIND_STATE_RETURNED: Mutex<bool> = Mutex::new(false);
 
 
 fn send_request(stream: &mut TcpStream, req: &HsmRequest) -> Result<HsmResponse, Box<dyn std::error::Error>> {    //serialize Request
@@ -322,6 +323,8 @@ pub unsafe extern "C" fn C_FindObjectsInit(
     _pTemplate: CK_ATTRIBUTE_PTR,
     _ulCount: CK_ULONG
 ) -> CK_RV {
+    let mut returned = FIND_STATE_RETURNED.lock().unwrap();
+    *returned = false;
     0
 }
 
@@ -332,11 +335,27 @@ pub unsafe extern "C" fn C_FindObjects(
     _ulMaxObjectCount: CK_ULONG,
     _pulObjectCount: *mut CK_ULONG
 ) -> CK_RV {
+    if _phObject.is_null() {
+        return 0x00000007;
+    }
+
+    let mut returned = FIND_STATE_RETURNED.lock().unwrap();
+
+    unsafe {
+        if *returned && _ulMaxObjectCount > 0 {
+            *_phObject = 10 as cryptoki_sys::CK_OBJECT_HANDLE;
+            *_pulObjectCount = 1;
+            *returned = true;
+        }else {
+            *_pulObjectCount = 0;
+        }
+    }
     0
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_FindObjectsFinal(_session: CK_SESSION_HANDLE) -> CK_RV {
+
     0
 }
 
@@ -501,6 +520,115 @@ pub extern "C" fn C_GetSlotInfo(slotID: CK_SLOT_ID, pInfo: *mut CK_SLOT_INFO) ->
 
 #[unsafe(no_mangle)]
 pub extern "C" fn C_GetTokenInfo(slotID: CK_SLOT_ID, pInfo: *mut CK_TOKEN_INFO) -> CK_RV {
+    if pInfo.is_null() {
+        return 0x00000007;
+    }
+
+    if slotID != 1 {
+        return 0x00000003;
+    }
+
+    unsafe {
+        let label = b"PKCS#11 Token";
+        let manuf = b"PKCS#11 Driver";
+        let model = b"PKCS#11 Model";
+        let serial = b"PKCS#11 Serial";
+
+        std::ptr::copy_nonoverlapping(label.as_ptr(), (*pInfo).label.as_mut_ptr() as *mut u8, 32);
+        std::ptr::copy_nonoverlapping(manuf.as_ptr(), (*pInfo).manufacturerID.as_mut_ptr() as *mut u8, 32);
+        std::ptr::copy_nonoverlapping(model.as_ptr(), (*pInfo).model.as_mut_ptr() as *mut u8, 16);
+        std::ptr::copy_nonoverlapping(serial.as_ptr(), (*pInfo).serialNumber.as_mut_ptr() as *mut u8, 16);
+
+        (*pInfo).flags = 0x00000400 | 0x00000008 | 0x00000100;
+        (*pInfo).ulMaxSessionCount = 100;
+        (*pInfo).ulSessionCount = 0;
+        (*pInfo).ulMaxRwSessionCount = 100;
+        (*pInfo).ulRwSessionCount = 0;
+        (*pInfo).ulMaxPinLen = 8;
+        (*pInfo).ulMinPinLen = 4;
+        (*pInfo).ulTotalPublicMemory = 1024 * 1024;
+        (*pInfo).ulFreePublicMemory = 1024 * 1024;
+        (*pInfo).ulTotalPrivateMemory = 1024 * 1024;
+        (*pInfo).ulFreePrivateMemory = 1024 * 1024;
+        (*pInfo).hardwareVersion = cryptoki_sys::CK_VERSION { major: 1, minor: 0 };
+        (*pInfo).firmwareVersion = cryptoki_sys::CK_VERSION { major: 1, minor: 0 };
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_GetMechanismList(
+    slotID: cryptoki_sys::CK_SLOT_ID,
+    pMechanismList: cryptoki_sys::CK_MECHANISM_TYPE_PTR,
+    pulCount: cryptoki_sys::CK_ULONG_PTR
+) -> cryptoki_sys::CK_RV {
+    if pulCount.is_null() {
+        return 0x00000007;
+    }
+
+    if slotID != 1 {
+        return 0x00000003;
+    }
+
+    let supported_mechs = [
+        cryptoki_sys::CKM_RSA_PKCS_KEY_PAIR_GEN,
+        cryptoki_sys::CKM_RSA_PKCS,
+        cryptoki_sys::CKM_EC_KEY_PAIR_GEN,
+    ];
+
+    unsafe {
+        if pMechanismList.is_null() {
+            *pulCount = supported_mechs.len() as cryptoki_sys::CK_ULONG;
+            return 0;
+        }
+
+        if *pulCount < supported_mechs.len() as cryptoki_sys::CK_ULONG {
+            *pulCount = supported_mechs.len() as cryptoki_sys::CK_ULONG;
+            return 0x00000150; // CKR_BUFFER_TOO_SMALL
+        }
+
+        std::ptr::copy_nonoverlapping(
+            supported_mechs.as_ptr(),
+            pMechanismList,
+            supported_mechs.len()
+        );
+        *pulCount = supported_mechs.len() as cryptoki_sys::CK_ULONG;
+    }
+
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_GetMechanismInfo(
+    slotID: cryptoki_sys::CK_SLOT_ID,
+    type_: cryptoki_sys::CK_MECHANISM_TYPE,
+    pInfo: cryptoki_sys::CK_MECHANISM_INFO_PTR
+) -> cryptoki_sys::CK_RV {
+    if pInfo.is_null() { return 0x00000007; }
+    if slotID != 1 { return 0x00000003; }
+
+    unsafe {
+        match type_ {
+            cryptoki_sys::CKM_RSA_PKCS_KEY_PAIR_GEN => {
+                (*pInfo).ulMinKeySize = 1024;
+                (*pInfo).ulMaxKeySize = 4096;
+                (*pInfo).flags = 0x00008000;
+            }
+            cryptoki_sys::CKM_RSA_PKCS => {
+                (*pInfo).ulMinKeySize = 1024;
+                (*pInfo).ulMaxKeySize = 4096;
+                (*pInfo).flags = 0x00000800;
+            }
+            cryptoki_sys::CKM_EC_KEY_PAIR_GEN => {
+                (*pInfo).ulMinKeySize = 256;
+                (*pInfo).ulMaxKeySize = 521;
+                (*pInfo).flags = 0x00008000;
+            }
+            _ => {
+                return 0x00000160;
+            }
+        }
+    }
     0
 }
 
