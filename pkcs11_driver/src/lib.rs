@@ -342,7 +342,7 @@ pub unsafe extern "C" fn C_FindObjects(
     let mut returned = FIND_STATE_RETURNED.lock().unwrap();
 
     unsafe {
-        if *returned && _ulMaxObjectCount > 0 {
+        if !*returned && _ulMaxObjectCount > 0 {
             *_phObject = 10 as cryptoki_sys::CK_OBJECT_HANDLE;
             *_pulObjectCount = 1;
             *returned = true;
