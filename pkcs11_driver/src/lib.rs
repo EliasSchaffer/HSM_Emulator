@@ -476,6 +476,26 @@ pub extern "C" fn C_GetInfo(pInfo: *mut CK_INFO) -> CK_RV {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn C_GetSlotInfo(slotID: CK_SLOT_ID, pInfo: *mut CK_SLOT_INFO) -> CK_RV {
+    if pInfo.is_null() {
+        return 0x00000007;
+    }
+
+    if slotID != 1 {
+        return 0x00000003;
+    }
+
+    unsafe {
+        let desc = b"PKCS#11 Slot";
+        let manuf = b"PKCS#11 Driver";
+
+        std::ptr::copy_nonoverlapping(desc.as_ptr(), (*pInfo).slotDescription.as_mut_ptr(), desc.len());
+        std::ptr::copy_nonoverlapping(manuf.as_ptr(), (*pInfo).manufacturerID.as_mut_ptr(), manuf.len());
+
+        (*pInfo).flags = 0x00000001 | 0x00000002;
+        (*pInfo).hardwareVersion = cryptoki_sys::CK_VERSION { major: 1, minor: 0 };
+        (*pInfo).firmwareVersion = cryptoki_sys::CK_VERSION { major: 1, minor: 0 };
+
+    }
     0
 }
 
