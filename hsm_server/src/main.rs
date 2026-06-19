@@ -19,6 +19,7 @@ pub enum HsmRequest {
     OpenSession,
     CloseSession { session_id: u64 },
     Sign { session_id: u64, data: Vec<u8> },
+    GenerateKey { key_id: String, key_type: String },
     Error(String),
 }
 
@@ -27,6 +28,7 @@ pub enum HsmResponse {
     SessionOpened { session_id: u64 },
     SessionClosed,
     SignResult { signature: Vec<u8> },
+    KeyGenerated,
     Error(String),
 }
 
@@ -48,7 +50,7 @@ impl NonceSequence for SimpleNonceSequence {
 
 static SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 static ACTIVE_SESSIONS: LazyLock<Mutex<HashSet<u64>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
-fn handle_client(mut stream: TcpStream, d_pool: SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+async fn handle_client(mut stream: TcpStream, d_pool: SqlitePool, master_key: [u8; 32]) -> Result<(), Box<dyn std::error::Error>> {
     println!("Driver Connection established!");
 
     loop {
@@ -74,14 +76,14 @@ fn handle_client(mut stream: TcpStream, d_pool: SqlitePool) -> Result<(), Box<dy
                 let existed = ACTIVE_SESSIONS.lock().unwrap().remove(&session_id);
                 if existed {
                     HsmResponse::SessionClosed
-                }else {
+                } else {
                     HsmResponse::Error("Session not found!".to_string())
                 }
             }
             HsmRequest::Sign { session_id, data } => {
                 println!("Signing Data for Session {}", session_id);
 
-                //TODO Load key from HSM
+                // TODO: Hier später echten Schlüssel aus load_key_from_db laden & decrypt_blob nutzen
                 let pem_string = "-----BEGIN PRIVATE KEY-----\n\
                       MC4CAQAwBQYDK2VwBCIEINTp9M7v7K62bUvpx6Hh7vKclBv7v0jXlNmZ4X9v7v9A\n\
                       -----END PRIVATE KEY-----";
@@ -91,11 +93,14 @@ fn handle_client(mut stream: TcpStream, d_pool: SqlitePool) -> Result<(), Box<dy
 
                 HsmResponse::SignResult { signature: signature_bytes }
             }
-
-            //TODO implement
-            HsmRequest::Error(_) => todo!()
+            HsmRequest::GenerateKey { key_id, key_type } => {
+                match generate_key(&master_key, key_id, key_type, &d_pool).await {
+                    Ok(_) => HsmResponse::KeyGenerated,
+                    Err(e) => HsmResponse::Error(e.to_string()),
+                }
+            }
+            HsmRequest::Error(e) => HsmResponse::Error(format!("Echo Error: {}", e)),
         };
-
 
         let encoded_res = bincode::serialize(&response)?;
         let res_len = encoded_res.len() as u32;
@@ -104,8 +109,8 @@ fn handle_client(mut stream: TcpStream, d_pool: SqlitePool) -> Result<(), Box<dy
         stream.flush()?;
     }
 
-println!("Driver Connection closed.");
-Ok(())
+    println!("Driver Connection closed.");
+    Ok(())
 }
 
 fn main() {
@@ -128,15 +133,23 @@ fn main() {
     let db_pool = rt.block_on(setup_database()).unwrap();
 
     let listener = TcpListener::bind("127.0.0.1:8888").unwrap();
+    // Hol dir ein Handle auf die bereits erstellte Tokio-Runtime
+    let handle = rt.handle();
+
     println!("HSM Emulator Server running on 127.0.0.1:8888");
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let pool_cloned = db_pool.clone();
-                if let Err(e) = handle_client(stream, pool_cloned) {
-                    eprintln!("Error on Client: {}", e);
-                }
+                let key_copy = master_key; // Kopiert das Array [u8; 32] für diesen Client
+
+                // Spawne den asynchronen Task auf der Runtime
+                handle.spawn(async move {
+                    if let Err(e) = handle_client(stream, pool_cloned, key_copy).await {
+                        eprintln!("Error on Client: {}", e);
+                    }
+                });
             }
             Err(e) => eprintln!("Connection Error: {}", e),
         }
@@ -258,6 +271,24 @@ pub fn decrypt_blob(master_key: &[u8; 32], encrypted_packet: &[u8]) -> Result<Ve
         .map_err(|_| "Decryption failed")?;
 
     Ok(decrypted_data.to_vec())
+}
+
+pub async fn generate_key(master_key: &[u8; 32], key_id: String, key_type: String, d_pool: &SqlitePool) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let key_bytes = match key_type.as_str() {
+        "Ed25519" => {
+            let alg = &rcgen::PKCS_ED25519;
+            let key_pair = KeyPair::generate_for(alg).unwrap();
+            key_pair.serialize_der()
+        },
+        _ => {
+            return Err("Invalid Key Type".into());
+        }
+    };
+
+    let encrypted_blob = encrypt_blob(master_key, &key_bytes)?;
+
+    save_key_to_db(d_pool, &key_id, &key_type, &encrypted_blob).await?;
+    Ok(encrypted_blob)
 }
 
 
