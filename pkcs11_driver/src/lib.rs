@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
+use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE, CK_INFO, CK_SLOT_INFO, CK_TOKEN_INFO};
 use std::ptr;
 use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
@@ -32,11 +32,11 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     version: cryptoki_sys::CK_VERSION { major: 2, minor: 40 },
     C_Initialize: Some(C_Initialize),
     C_Finalize: Some(C_Finalize),
-    C_GetInfo: None,
+    C_GetInfo: Some(C_GetInfo),
     C_GetFunctionList: Some(C_GetFunctionList),
     C_GetSlotList: Some(C_GetSlotList),
-    C_GetSlotInfo: None,
-    C_GetTokenInfo: None,
+    C_GetSlotInfo: Some(C_GetSlotInfo),
+    C_GetTokenInfo: Some(C_GetTokenInfo),
     C_GetMechanismList: None,
     C_GetMechanismInfo: None,
     C_InitToken: None,
@@ -450,6 +450,37 @@ pub unsafe extern "C" fn C_GetSlotList(
     std::ptr::copy_nonoverlapping(fake_slots.as_ptr() as *const CK_SLOT_ID, pSlotList, fake_slots.len());
     *pulCount = fake_slots.len() as CK_ULONG;
 
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn C_GetInfo(pInfo: *mut CK_INFO) -> CK_RV {
+    if pInfo.is_null() {
+        return 0x00000007;
+    }
+
+    unsafe {
+        (*pInfo).cryptokiVersion = cryptoki_sys::CK_VERSION { major: 2, minor: 40};
+
+        let manufacturer_id = "PKCS#11 Driver";
+        let library_description = "PKCS#11 Driver";
+
+        std::ptr::copy_nonoverlapping(manufacturer_id.as_ptr(), (*pInfo).manufacturerID.as_mut_ptr(), manufacturer_id.len());
+        std::ptr::copy_nonoverlapping(library_description.as_ptr(), (*pInfo).libraryDescription.as_mut_ptr(), library_description.len());
+
+        (*pInfo).flags = 0;
+        (*pInfo).libraryVersion = cryptoki_sys::CK_VERSION { major: 1, minor: 0};
+    }
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn C_GetSlotInfo(slotID: CK_SLOT_ID, pInfo: *mut CK_SLOT_INFO) -> CK_RV {
+    0
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn C_GetTokenInfo(slotID: CK_SLOT_ID, pInfo: *mut CK_TOKEN_INFO) -> CK_RV {
     0
 }
 
