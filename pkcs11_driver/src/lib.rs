@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use cryptoki_sys::{CK_RV, CK_FUNCTION_LIST, CK_NOTIFY, CK_SESSION_HANDLE, CK_FLAGS, CK_SLOT_ID, CK_VOID_PTR, CK_UTF8CHAR_PTR, CK_MECHANISM, CK_ATTRIBUTE_PTR, CK_ULONG, CK_OBJECT_HANDLE, CK_BYTE_PTR, CK_USER_TYPE};
 use std::ptr;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use bincode;
 
@@ -11,8 +12,9 @@ use bincode;
 pub enum HsmRequest {
     OpenSession,
     CloseSession { session_id: u64 },
-    Sign { session_id: u64, data: Vec<u8> },
-    
+    Sign { session_id: u64, key_id: String, data: Vec<u8> },
+    GenerateKey { key_id: String, key_type: String },
+    Error(String),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -20,9 +22,11 @@ pub enum HsmResponse {
     SessionOpened { session_id: u64 },
     SessionClosed,
     SignResult { signature: Vec<u8> },
+    KeyGenerated,
     Error(String),
 }
 
+static SESSION_KEYS: LazyLock<Mutex<HashMap<u64, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     version: cryptoki_sys::CK_VERSION { major: 2, minor: 40 },
@@ -30,7 +34,7 @@ static FUNCTION_LIST: CK_FUNCTION_LIST = CK_FUNCTION_LIST {
     C_Finalize: Some(C_Finalize),
     C_GetInfo: None,
     C_GetFunctionList: Some(C_GetFunctionList),
-    C_GetSlotList: None,
+    C_GetSlotList: Some(C_GetSlotList),
     C_GetSlotInfo: None,
     C_GetTokenInfo: None,
     C_GetMechanismList: None,
@@ -160,7 +164,6 @@ pub unsafe extern "C" fn C_OpenSession(
     let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
 
     if let Some(ref mut stream) = *conn_guard {
-        // 1. Führe den Request aus und fange das Result ab
         match send_request(stream, &req) {
             Ok(HsmResponse::SessionOpened { session_id}) => {
 
@@ -247,6 +250,70 @@ pub unsafe extern "C" fn C_GenerateKeyPair(
     _phPublicKey: *mut CK_OBJECT_HANDLE,
     _phPrivateKey: *mut CK_OBJECT_HANDLE
 ) -> CK_RV {
+
+    let mut key_id = String::new();
+    let attributes = unsafe {
+        std::slice::from_raw_parts(_pPublicKeyTemplate, _ulPublicKeyAttributeCount as usize)
+    };
+
+    for attr in attributes {
+        if attr.type_ == cryptoki_sys::CKA_ID {
+            let value_slice = unsafe {
+                std::slice::from_raw_parts(attr.pValue as *const u8, attr.ulValueLen as usize)
+            };
+            key_id = String::from_utf8_lossy(value_slice).into_owned();
+            break;
+        }
+    }
+
+    if key_id.is_empty() {
+        key_id = "default_key_id".to_string();
+    }
+
+    let mech_type = unsafe { (*_pMechanism).mechanism };
+    let key_type = match mech_type {
+        cryptoki_sys::CKM_RSA_PKCS_KEY_PAIR_GEN => "RSA-2048",
+        cryptoki_sys::CKM_EC_KEY_PAIR_GEN => "ECDSA",
+        _ => "Ed25519",
+    };
+
+
+    // 1. Zuerst den Request bauen (mit .clone())
+    let req = HsmRequest::GenerateKey {
+        key_id: key_id.clone(),
+        key_type: key_type.to_string()
+    };
+
+    let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
+
+    if let Some(ref mut stream) = *conn_guard {
+        match send_request(stream, &req) {
+            Ok(HsmResponse::KeyGenerated) => {
+                println!("Schlüssel erfolgreich im HSM generiert!");
+
+                let numeric_handle = key_id.parse::<u64>().unwrap_or(1001);
+
+                if !_phPublicKey.is_null() {
+                    *_phPublicKey = numeric_handle as CK_OBJECT_HANDLE;
+                }
+                if !_phPrivateKey.is_null() {
+                    *_phPrivateKey = numeric_handle as CK_OBJECT_HANDLE;
+                }
+            }
+            Ok(HsmResponse::Error(err_msg)) => {
+                eprintln!("HSM Error: {}", err_msg);
+                return 0x00000006;
+            }
+            Ok(other) => {
+                eprintln!("Unerwartete Antwort vom HSM: {:?}", other);
+                return 0x00000006;
+            }
+            Err(e) => {
+                eprintln!("Netzwerkfehler: {:?}", e);
+                return 0x00000006;
+            }
+        }
+    }
     0
 }
 
@@ -276,10 +343,16 @@ pub unsafe extern "C" fn C_FindObjectsFinal(_session: CK_SESSION_HANDLE) -> CK_R
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn C_SignInit(
-    _session: CK_SESSION_HANDLE,
+    session: CK_SESSION_HANDLE,
     _pMechanism: *mut CK_MECHANISM,
-    _hKey: CK_OBJECT_HANDLE
+    hKey: CK_OBJECT_HANDLE
 ) -> CK_RV {
+    let session_id = session as u64;
+    let key_handle = hKey as u64;
+
+    let mut keys_guard = SESSION_KEYS.lock().unwrap();
+    keys_guard.insert(session_id, key_handle);
+
     0
 }
 
@@ -295,11 +368,24 @@ pub unsafe extern "C" fn C_Sign(
         return 0x00000007;
     }
 
+    let session_id = session as u64;
+
+    let key_handle = {
+        let keys_guard = SESSION_KEYS.lock().unwrap();
+        match keys_guard.get(&session_id) {
+            Some(handle) => *handle,
+            None => return 0x00000006,
+        }
+    };
+
+    let key_id = key_handle.to_string();
+
+
     let data_slice = std::slice::from_raw_parts(_pData, _ulDataLen as usize);
     let data_vec = Vec::from(data_slice);
 
     let session_id = session as u64;
-    let req = HsmRequest::Sign { session_id, data: data_vec };
+    let req = HsmRequest::Sign { session_id, key_id, data: data_vec };
 
     let mut conn_guard = SERVER_CONNECTION.lock().unwrap();
     if let Some(ref mut stream) = *conn_guard {
@@ -337,6 +423,35 @@ pub unsafe extern "C" fn C_Sign(
         eprintln!("Fehler: No active Server Connection found!");
         0x00000003
     }
+
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn C_GetSlotList(
+    tokenPresent: cryptoki_sys::CK_BBOOL,
+    pSlotList: *mut CK_SLOT_ID,
+    pulCount: *mut CK_ULONG,
+) -> CK_RV {
+    if pulCount.is_null() {
+        return 0x00000007;
+    }
+
+    let fake_slots = [1u64];
+
+    if pSlotList.is_null() {
+        *pulCount = fake_slots.len() as CK_ULONG;
+        return 0;
+    }
+
+    if (*pulCount as usize) < fake_slots.len() {
+        *pulCount = fake_slots.len() as CK_ULONG;
+        return 0x00000150; // CKR_BUFFER_TOO_SMALL
+    }
+
+    std::ptr::copy_nonoverlapping(fake_slots.as_ptr() as *const CK_SLOT_ID, pSlotList, fake_slots.len());
+    *pulCount = fake_slots.len() as CK_ULONG;
+
+    0 // CKR_OK
 }
 
 

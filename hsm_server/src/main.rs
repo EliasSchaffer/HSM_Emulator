@@ -18,7 +18,7 @@ use ring::aead::{self, BoundKey, OpeningKey};
 pub enum HsmRequest {
     OpenSession,
     CloseSession { session_id: u64 },
-    Sign { session_id: u64, data: Vec<u8> },
+    Sign { session_id: u64, key_id: String, data: Vec<u8> },
     GenerateKey { key_id: String, key_type: String },
     Error(String),
 }
@@ -80,18 +80,21 @@ async fn handle_client(mut stream: TcpStream, d_pool: SqlitePool, master_key: [u
                     HsmResponse::Error("Session not found!".to_string())
                 }
             }
-            HsmRequest::Sign { session_id, data } => {
+            HsmRequest::Sign { session_id, key_id, data } => {
                 println!("Signing Data for Session {}", session_id);
 
-                // TODO: Hier später echten Schlüssel aus load_key_from_db laden & decrypt_blob nutzen
-                let pem_string = "-----BEGIN PRIVATE KEY-----\n\
-                      MC4CAQAwBQYDK2VwBCIEINTp9M7v7K62bUvpx6Hh7vKclBv7v0jXlNmZ4X9v7v9A\n\
-                      -----END PRIVATE KEY-----";
+                let encrypted_blob = load_key_from_db(&d_pool, &key_id).await?;
 
-                let key_pair = rcgen::KeyPair::from_pem(pem_string).unwrap();
-                let signature_bytes = key_pair.sign(&data).unwrap();
+                if encrypted_blob.is_none() {
+                    HsmResponse::Error("Key not found!".to_string())
+                } else {
+                    let decrypted_key = decrypt_blob(&master_key, &encrypted_blob.unwrap()).unwrap();
+                    println!("Decrypted Data: {:?}", decrypted_key);
 
-                HsmResponse::SignResult { signature: signature_bytes }
+                    let key_pair: KeyPair = (&decrypted_key[..]).try_into().unwrap();
+                    let mut signature_bytes = key_pair.sign(&data);
+                    HsmResponse::SignResult { signature: signature_bytes.unwrap() }
+                }
             }
             HsmRequest::GenerateKey { key_id, key_type } => {
                 match generate_key(&master_key, key_id, key_type, &d_pool).await {
@@ -280,6 +283,32 @@ pub async fn generate_key(master_key: &[u8; 32], key_id: String, key_type: Strin
             let key_pair = KeyPair::generate_for(alg).unwrap();
             key_pair.serialize_der()
         },
+        "RSA-2048" => {
+            let alg = &rcgen::PKCS_RSA_SHA256;
+            let key_pair = KeyPair::generate_for(alg).unwrap();
+            key_pair.serialize_der()
+        }
+        "ECDSA" => {
+            let alg = &rcgen::PKCS_ECDSA_P256_SHA256;
+            let key_pair = KeyPair::generate_for(alg).unwrap();
+            key_pair.serialize_der()
+        },
+        "AES-GCM" => {
+            let rand = ring::rand::SystemRandom::new();
+            let mut key_bytes = vec![0u8; 32]; // 32 Bytes = AES-256
+            rand.fill(&mut key_bytes)
+                .map_err(|_| "Fehler beim Generieren der AES-GCM Bytes")?;
+
+            key_bytes
+        },
+        "AES-CBC" => {
+            let rand = ring::rand::SystemRandom::new();
+            let mut key_bytes = vec![0u8; 32]; // 32 Bytes = AES-256
+            rand.fill(&mut key_bytes)
+                .map_err(|_| "Fehler beim Generieren der AES-CBC Bytes")?;
+
+            key_bytes
+        }
         _ => {
             return Err("Invalid Key Type".into());
         }
