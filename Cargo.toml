@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "hsm_server",
+    "hsm_server", "hsm_test",
     "pkcs11_driver",
 ]

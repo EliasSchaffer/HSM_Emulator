@@ -278,7 +278,6 @@ pub unsafe extern "C" fn C_GenerateKeyPair(
     };
 
 
-    // 1. Zuerst den Request bauen (mit .clone())
     let req = HsmRequest::GenerateKey {
         key_id: key_id.clone(),
         key_type: key_type.to_string()
@@ -451,7 +450,7 @@ pub unsafe extern "C" fn C_GetSlotList(
     std::ptr::copy_nonoverlapping(fake_slots.as_ptr() as *const CK_SLOT_ID, pSlotList, fake_slots.len());
     *pulCount = fake_slots.len() as CK_ULONG;
 
-    0 // CKR_OK
+    0
 }
 
 

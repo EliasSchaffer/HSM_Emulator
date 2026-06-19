@@ -312,7 +312,16 @@ version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "750380200f47d4ff677be725b6e0d78b590e1d0343573dcd4b62147f25dc6efa"
 dependencies = [
- "libloading",
+ "libloading 0.7.4",
+]
+
+[[package]]
+name = "cryptoki-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1fd850498411e4057f1cba79e6e2bc7cbe960544c1046ab46d4685c403a1121"
+dependencies = [
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -646,6 +655,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hsm_test"
+version = "0.1.0"
+dependencies = [
+ "cryptoki-sys 0.5.0",
+ "libloading 0.8.9",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -876,6 +893,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
+]
+
+[[package]]
 name = "libsqlite3-sys"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1067,7 +1094,7 @@ name = "pkcs11_driver"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "cryptoki-sys",
+ "cryptoki-sys 0.1.8",
  "serde",
 ]
 
